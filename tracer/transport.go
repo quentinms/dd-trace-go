@@ -3,6 +3,8 @@ package tracer
 import (
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"strconv"
@@ -116,6 +118,7 @@ func (t *httpTransport) SendTraces(traces [][]*Span) (*http.Response, error) {
 		return &http.Response{StatusCode: 0}, err
 	}
 	defer response.Body.Close()
+	defer io.Copy(ioutil.Discard, response.Body)
 
 	// if we got a 404 we should downgrade the API to a stable version (at most once)
 	if (response.StatusCode == 404 || response.StatusCode == 415) && !t.compatibilityMode {
@@ -157,6 +160,7 @@ func (t *httpTransport) SendServices(services map[string]Service) (*http.Respons
 		return &http.Response{StatusCode: 0}, err
 	}
 	defer response.Body.Close()
+	defer io.Copy(ioutil.Discard, response.Body)
 
 	// Downgrade if necessary
 	if (response.StatusCode == 404 || response.StatusCode == 415) && !t.compatibilityMode {
