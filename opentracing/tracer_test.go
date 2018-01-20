@@ -1,7 +1,6 @@
 package opentracing
 
 import (
-	"net/http"
 	"testing"
 	"time"
 
@@ -104,6 +103,20 @@ func TestTracerSpanTags(t *testing.T) {
 	assert.Equal("value", span.Span.Meta["key"])
 }
 
+func TestTracerSpanGlobalTags(t *testing.T) {
+	assert := assert.New(t)
+
+	config := NewConfiguration()
+	config.GlobalTags["key"] = "value"
+	tracer, _, _ := NewTracer(config)
+
+	span := tracer.StartSpan("web.request").(*Span)
+	assert.Equal("value", span.Span.Meta["key"])
+
+	child := tracer.StartSpan("db.query", opentracing.ChildOf(span.Context())).(*Span)
+	assert.Equal("value", child.Span.Meta["key"])
+}
+
 func TestTracerSpanStartTime(t *testing.T) {
 	assert := assert.New(t)
 
@@ -115,45 +128,4 @@ func TestTracerSpanStartTime(t *testing.T) {
 	assert.True(ok)
 
 	assert.Equal(startTime.UnixNano(), span.Span.Start)
-}
-
-func TestTracerPropagation(t *testing.T) {
-	assert := assert.New(t)
-
-	config := NewConfiguration()
-	tracer, _, _ := NewTracer(config)
-
-	root := tracer.StartSpan("web.request")
-	ctx := root.Context()
-	headers := http.Header{}
-
-	// inject the SpanContext
-	carrier := opentracing.HTTPHeadersCarrier(headers)
-	err := tracer.Inject(ctx, opentracing.HTTPHeaders, carrier)
-	assert.Nil(err)
-
-	// retrieve the SpanContext
-	propagated, err := tracer.Extract(opentracing.HTTPHeaders, carrier)
-	assert.Nil(err)
-
-	tCtx, ok := ctx.(SpanContext)
-	assert.True(ok)
-	tPropagated, ok := propagated.(SpanContext)
-	assert.True(ok)
-
-	// compare if there is a Context match
-	assert.Equal(tCtx.traceID, tPropagated.traceID)
-	assert.Equal(tCtx.spanID, tPropagated.spanID)
-
-	// ensure a child can be created
-	child := tracer.StartSpan("db.query", opentracing.ChildOf(propagated))
-	tRoot, ok := root.(*Span)
-	assert.True(ok)
-	tChild, ok := child.(*Span)
-	assert.True(ok)
-
-	assert.NotEqual(uint64(0), tChild.Span.TraceID)
-	assert.NotEqual(uint64(0), tChild.Span.SpanID)
-	assert.Equal(tRoot.Span.SpanID, tChild.Span.ParentID)
-	assert.Equal(tRoot.Span.TraceID, tChild.Span.ParentID)
 }

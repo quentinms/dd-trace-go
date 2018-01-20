@@ -13,9 +13,11 @@ import (
 // propagation. In the current state, this Tracer is a compatibility layer
 // that wraps the Datadog Tracer implementation.
 type Tracer struct {
-	impl           *ddtrace.Tracer    // a Datadog Tracer implementation
-	serviceName    string             // default Service Name defined in the configuration
-	textPropagator *textMapPropagator // injector for Context propagation
+	// impl is the Datadog Tracer implementation.
+	impl *ddtrace.Tracer
+
+	// config holds the Configuration used to create the Tracer.
+	config *Configuration
 }
 
 // StartSpan creates, starts, and returns a new Span with the given `operationName`
@@ -57,7 +59,7 @@ func (t *Tracer) startSpanWithOptions(operationName string, options ot.StartSpan
 
 	if parent == nil {
 		// create a root Span with the default service name and resource
-		span = t.impl.NewRootSpan(operationName, t.serviceName, operationName)
+		span = t.impl.NewRootSpan(operationName, t.config.ServiceName, operationName)
 
 		if hasParent {
 			// the Context doesn't have a Span reference because it
@@ -65,6 +67,7 @@ func (t *Tracer) startSpanWithOptions(operationName string, options ot.StartSpan
 			// values manually
 			span.TraceID = context.traceID
 			span.ParentID = context.spanID
+			t.impl.Sample(span)
 		}
 	} else {
 		// create a child Span that inherits from a parent
@@ -81,6 +84,7 @@ func (t *Tracer) startSpanWithOptions(operationName string, options ot.StartSpan
 			parentID: span.ParentID,
 			sampled:  span.Sampled,
 		},
+		tracer: t,
 	}
 	otSpan.context.span = otSpan
 
@@ -97,11 +101,14 @@ func (t *Tracer) startSpanWithOptions(operationName string, options ot.StartSpan
 		}
 	}
 
-	// set tags if available
-	if len(options.Tags) > 0 {
-		for k, v := range options.Tags {
-			otSpan.SetTag(k, v)
-		}
+	// add tags from options
+	for k, v := range options.Tags {
+		otSpan.SetTag(k, v)
+	}
+
+	// add global tags
+	for k, v := range t.config.GlobalTags {
+		otSpan.SetTag(k, v)
 	}
 
 	return otSpan
@@ -115,9 +122,8 @@ func (t *Tracer) startSpanWithOptions(operationName string, options ot.StartSpan
 func (t *Tracer) Inject(ctx ot.SpanContext, format interface{}, carrier interface{}) error {
 	switch format {
 	case ot.TextMap, ot.HTTPHeaders:
-		return t.textPropagator.Inject(ctx, carrier)
+		return t.config.TextMapPropagator.Inject(ctx, carrier)
 	}
-
 	return ot.ErrUnsupportedFormat
 }
 
@@ -125,9 +131,8 @@ func (t *Tracer) Inject(ctx ot.SpanContext, format interface{}, carrier interfac
 func (t *Tracer) Extract(format interface{}, carrier interface{}) (ot.SpanContext, error) {
 	switch format {
 	case ot.TextMap, ot.HTTPHeaders:
-		return t.textPropagator.Extract(carrier)
+		return t.config.TextMapPropagator.Extract(carrier)
 	}
-
 	return nil, ot.ErrUnsupportedFormat
 }
 
@@ -157,8 +162,8 @@ func NewTracer(config *Configuration) (ot.Tracer, io.Closer, error) {
 	// configure a Datadog Tracer
 	transport := ddtrace.NewTransport(config.AgentHostname, config.AgentPort)
 	tracer := &Tracer{
-		impl:        ddtrace.NewTracerTransport(transport),
-		serviceName: config.ServiceName,
+		impl:   ddtrace.NewTracerTransport(transport),
+		config: config,
 	}
 	tracer.impl.SetDebugLogging(config.Debug)
 	tracer.impl.SetSampleRate(config.SampleRate)
